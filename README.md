@@ -15,7 +15,7 @@
 
 ## Supabase setup
 1. Open Supabase Dashboard → SQL Editor.
-2. Run `supabase_schema.sql` completely.
+2. Run `supabase/schema.sql` completely.
 3. In Authentication → URL Configuration, set the Site URL to your GitHub Pages URL, for example:
    `https://YOUR_USERNAME.github.io/InventoryV2/`
 4. Add the same URL as an allowed redirect URL.
