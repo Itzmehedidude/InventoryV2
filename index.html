@@ -5,12 +5,12 @@
 <div id="authScreen" class="auth-screen">
 <div class="auth-card"><div class="auth-brand">StockFlow</div><h1 id="authTitle">Welcome back</h1><p id="authSubtitle">Sign in to access your inventory.</p>
 <form id="authForm"><div class="field"><label>EMAIL</label><input id="authEmail" type="email" autocomplete="email" required></div><div class="field"><label>PASSWORD</label><input id="authPassword" type="password" autocomplete="current-password" minlength="6" required></div><div class="field" id="authConfirmWrap" style="display:none"><label>CONFIRM PASSWORD</label><input id="authConfirm" type="password" autocomplete="new-password" minlength="6"></div><button class="primary" id="authSubmit" type="submit">Sign In</button></form>
-<button class="text-button" id="authSwitch" type="button">Create an account</button><div id="authMessage" class="auth-message"></div></div></div>
+<button class="text-button" id="mmm" type="button">Create an account</button><div id="authMessage" class="auth-message"></div></div></div>
 
 <div id="appShell">
 <aside id="side"><div class="brand"><b>StockFlow</b><small>Offline Inventory</small></div><button data-page="dashboard" class="nav active">▦ Dashboard</button><button data-page="inventory" class="nav">▣ Inventory</button><button data-page="sales" class="nav">↗ Sales History</button><button data-page="reports" class="nav">◔ Reports</button><button data-page="settings" class="nav">⚙ Settings</button>
 <div class="side-user"><b id="userEmail"></b><button id="signOut" type="button">Sign out</button></div></aside>
-<main><header><div><button id="menu" aria-label="Menu">☰</button><h1 id="title">Dashboard</h1><p id="sub">Overview of your stock and sales</p></div><div class="right"><span id="syncPill" class="pill">Synced</span><button id="addTop" class="primary">＋ Add Product</button></div></header><section id="content"></section></main>
+<main><header><div><button id="menu" aria-label="Menu">☰</button><h1 id="title">Dashboard</h1><p id="sub">Overview of your stock and sales</p></div><div class="right"><button id="eyeBtn" class="icon-btn" type="button" style="display:none"></button><span id="syncPill" class="pill">Synced</span><button id="addTop" class="primary">＋ Add Product</button></div></header><section id="content"></section></main>
 </div>
 
 <div id="modal" class="overlay"><div id="modalBox" class="modal"></div></div>

@@ -81,3 +81,37 @@ header>div:first-child{min-width:0}
   .modal{padding:18px}
   .sizes{grid-template-columns:repeat(3,1fr)}
 }
+
+/* ===== v4: stock-out tabs, returns, privacy eye, customer ===== */
+.icon-btn{align-items:center;justify-content:center;width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:#fff;color:#374151;padding:0}
+.icon-btn:hover{background:#f3f4f8}
+.mask{letter-spacing:.12em;color:#9ca3af;font-weight:700}
+.card-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+.card-head h2{margin:0}
+.sm{padding:6px 11px;font-size:12.5px}
+.block{display:block}
+.stat em{display:block;font-style:normal;color:var(--muted);font-size:12.5px;margin-top:4px}
+.stats.three{grid-template-columns:repeat(3,1fr)}
+.seg{display:inline-flex;background:#e9ecf4;border-radius:11px;padding:4px;gap:4px;margin-bottom:14px}
+.seg button{border:0;background:transparent;padding:8px 16px;border-radius:8px;font-weight:700;color:#4b5563;display:inline-flex;align-items:center;gap:8px}
+.seg button span{background:#d9deea;color:#374151;border-radius:99px;font-size:12px;padding:1px 8px}
+.seg button.on{background:#fff;color:var(--text);box-shadow:0 1px 4px rgba(16,24,40,.12)}
+.seg button.on span{background:var(--primary);color:#fff}
+.badge{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;vertical-align:middle;margin-left:6px}
+.badge.out{background:#fee2e2;color:#991b1b}
+.badge.ret{background:#fef3c7;color:#92400e}
+.product.is-out{background:#fcfcfd}
+.product.is-out h3{color:#4b5563}
+tr.returned td{color:#9ca3af}
+tr.returned .tot{text-decoration:line-through}
+td small.muted{font-size:11.5px}
+.danger.solid{background:#dc2626;color:#fff}
+.danger.solid:hover:not(:disabled){background:#b91c1c}
+.notice.warn{background:#fef2f2;color:#7f1d1d;line-height:1.6}
+.field label i{font-style:normal;font-weight:500;text-transform:none;color:#9ca3af;letter-spacing:0}
+@media(max-width:800px){
+  .stats.three{grid-template-columns:1fr}
+  .seg{display:flex}.seg button{flex:1;justify-content:center}
+  .product>div:last-child{flex-wrap:wrap}
+  .card-head .secondary{padding:7px 12px}
+}
