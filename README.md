@@ -4,7 +4,7 @@ GitHub Pages frontend + Supabase Auth/Postgres + IndexedDB offline cache.
 
 ## Setup
 1. Create a Supabase project.
-2. Open Supabase SQL Editor and run `supabase_schema.sql` from this package. It creates/updates the tables, RLS policies, Realtime publication, and the atomic `record_stock_sale` function.
+2. Open Supabase SQL Editor and run `supabase_schema.sql`.
 3. Copy `config.example.js` to `config.js`.
 4. Put your Supabase Project URL and Publishable Key into `config.js`.
 5. In Supabase Authentication settings, configure the Site URL and redirect URL to your GitHub Pages URL.
@@ -24,7 +24,7 @@ The app keeps a local IndexedDB cache. If a cloud write fails, it remains locall
 ## Multiple phones
 Sign into the same StockFlow account on each phone. The same cloud inventory is then available on all those phones.
 
-This starter syncs when the app opens, when it comes online, and from Settings -> Sync Now. Realtime is enabled with Postgres Changes. The package includes the required publication setup.
+This starter syncs when the app opens, when it comes online, and from Settings -> Sync Now. Instant realtime subscriptions can be added next.
 
 
 ## Realtime
