@@ -1,31 +1,32 @@
-# StockFlow — Supabase Edition
+# InventoryV2 — Supabase Realtime Final
 
-GitHub Pages frontend + Supabase Auth/Postgres + IndexedDB offline cache.
+## Included
+- Supabase email/password authentication
+- One-time auth initialization using Supabase INITIAL_SESSION
+- Clear signup/login errors
+- PostgreSQL shared inventory
+- Row Level Security
+- Realtime product and sales updates
+- IndexedDB offline cache
+- Offline product/sale queue
+- Atomic PostgreSQL stock sale transaction
+- Dashboard, inventory, sales history and reports
+- GitHub Pages compatible PWA
 
-## Setup
-1. Create a Supabase project.
-2. Open Supabase SQL Editor and run `supabase_schema.sql`.
-3. Copy `config.example.js` to `config.js`.
-4. Put your Supabase Project URL and Publishable Key into `config.js`.
-5. In Supabase Authentication settings, configure the Site URL and redirect URL to your GitHub Pages URL.
-6. Upload the files to GitHub Pages.
+## Supabase setup
+1. Open Supabase Dashboard → SQL Editor.
+2. Run `supabase_schema.sql` completely.
+3. In Authentication → URL Configuration, set the Site URL to your GitHub Pages URL, for example:
+   `https://YOUR_USERNAME.github.io/InventoryV2/`
+4. Add the same URL as an allowed redirect URL.
+5. Put your project URL and Publishable key in `config.js`.
+6. Upload the project files to the GitHub repository root.
 
-Use only the Supabase **Publishable** key in the browser. Never put a service-role/secret key in `config.js`.
+## Important
+Use the Publishable key in `config.js`, never a secret/service-role key. RLS protects the database.
 
-## Authentication
-Email/password sign-up, email/password sign-in, persistent sessions and sign-out are included.
-
-## Data model
-Each product and sale belongs to the signed-in user. Row Level Security prevents one account from reading another account's data.
-
-## Offline
-The app keeps a local IndexedDB cache. If a cloud write fails, it remains locally queued and retries when the device is online.
-
-## Multiple phones
-Sign into the same StockFlow account on each phone. The same cloud inventory is then available on all those phones.
-
-This starter syncs when the app opens, when it comes online, and from Settings -> Sync Now. Instant realtime subscriptions can be added next.
-
+## Refresh/request behavior
+The app no longer calls `getSession()` plus an auth listener. It uses Supabase's `INITIAL_SESSION` event as the single startup auth path. Realtime events update the local cache directly instead of re-downloading both tables after every event.
 
 ## Realtime
-The app subscribes to Supabase Postgres Changes for the signed-in user's `products` and `sales` rows. Changes made on another phone are synced into the local cache and the current screen refreshes automatically. Run the updated `supabase/schema.sql` so both tables are in the `supabase_realtime` publication. Supabase notes that Postgres Changes respects RLS for subscribed rows. citeturn0search7turn0search2
+The SQL adds `products` and `sales` to `supabase_realtime`. Realtime is scoped by `user_id` and RLS.
