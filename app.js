@@ -1,47 +1,361 @@
-const C=window.STOCKFLOW_SUPABASE||{}, DB='stockflow_local', VER=4, PS='products', SS='sales', QS='sync_queue';
-let db,sb,currentUser,currentView='dashboard',authMode='login',realtimeChannel=null,realtimeTimer=null,authBooting=false;
-const $=s=>document.querySelector(s), esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
-function toast(m,type='ok'){let t=$('#toast');if(!t){t=document.createElement('div');t.id='toast';t.className='toast';document.body.append(t)}t.textContent=m;t.dataset.type=type;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2800)}
-function openDB(){return new Promise((res,rej)=>{let r=indexedDB.open(DB,VER);r.onupgradeneeded=e=>{let d=e.target.result;if(!d.objectStoreNames.contains(PS))d.createObjectStore(PS,{keyPath:'id'});if(!d.objectStoreNames.contains(SS))d.createObjectStore(SS,{keyPath:'id'});if(!d.objectStoreNames.contains(QS))d.createObjectStore(QS,{keyPath:'id',autoIncrement:true})};r.onsuccess=()=>{db=r.result;res(db)};r.onerror=()=>rej(r.error)})}
-function st(n,m='readonly'){return db.transaction(n,m).objectStore(n)}
-const all=n=>new Promise((r,j)=>{let q=st(n).getAll();q.onsuccess=()=>r(q.result||[]);q.onerror=()=>j(q.error)});
-const put=(n,v)=>new Promise((r,j)=>{let q=st(n,'readwrite').put(v);q.onsuccess=()=>r(q.result);q.onerror=()=>j(q.error)});
-const add=(n,v)=>new Promise((r,j)=>{let q=st(n,'readwrite').add(v);q.onsuccess=()=>r(q.result);q.onerror=()=>j(q.error)});
-const del=(n,id)=>new Promise((r,j)=>{let q=st(n,'readwrite').delete(id);q.onsuccess=()=>r();q.onerror=()=>j(q.error)});
-const stock=p=>(p.colours||[]).reduce((a,c)=>a+Object.values(c.sizes||{}).reduce((x,q)=>x+Number(q||0),0),0);
-const money=n=>`৳${Number(n||0).toLocaleString('en-BD',{maximumFractionDigits:2})}`;
-function closeModal(){let m=$('#modal');if(m){m.classList.remove('show');m.innerHTML=''}}
-function modal(h){let m=$('#modal');m.innerHTML=`<div class="modal modal-box">${h}</div>`;m.classList.add('show');m.onclick=e=>{if(e.target===m)closeModal()};m.querySelectorAll('[data-close]').forEach(x=>x.onclick=closeModal)}
-function ready(){return C.url&&!C.url.includes('YOUR_PROJECT')&&C.publishableKey&&!C.publishableKey.includes('YOUR_')}
-function showAuth(message=''){let a=$('#authScreen');a.style.display='flex';$('#appShell').style.display='none';$('#authTitle').textContent=authMode==='login'?'Welcome back':'Create your account';$('#authSubtitle').textContent=authMode==='login'?'Sign in to access your inventory.':'Create an account to sync inventory across phones.';$('#authSubmit').textContent=authMode==='login'?'Sign In':'Create Account';$('#authConfirmWrap').style.display=authMode==='login'?'none':'block';$('#authSwitch').textContent=authMode==='login'?'Create an account':'Already have an account? Sign in';$('#authMessage').textContent=message}
-async function authSubmit(e){e.preventDefault();if(!sb)return;let email=$('#authEmail').value.trim(),password=$('#authPassword').value,btn=$('#authSubmit');btn.disabled=true;$('#authMessage').textContent='';try{if(authMode==='login'){let {error}=await sb.auth.signInWithPassword({email,password});if(error)throw error;$('#authMessage').textContent='Signing in…'}else{if(password!==$('#authConfirm').value)throw Error('Passwords do not match.');let {data,error}=await sb.auth.signUp({email,password,options:{emailRedirectTo:location.origin+location.pathname}});if(error)throw error;if(data.session){$('#authMessage').textContent='Account created. Signing you in…'}else{$('#authMessage').textContent='Account created. Please check your email to confirm your account, then sign in.'}}}catch(e){console.error('Auth error',e);$('#authMessage').textContent=e.message||'Authentication failed.'}finally{btn.disabled=false}}
-async function auth(){if(!ready()){showAuth('Supabase setup is missing. Add your Project URL and Publishable Key to config.js.');return}if(!window.supabase?.createClient)throw Error('Supabase library failed to load. Check your internet connection and refresh.');sb=window.supabase.createClient(C.url,C.publishableKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});sb.auth.onAuthStateChange((event,session)=>{setTimeout(async()=>{try{if(event==='INITIAL_SESSION'){if(session)await signedIn(session.user);else showAuth();return}if(event==='SIGNED_IN'&&session){await signedIn(session.user);return}if(event==='SIGNED_OUT'){await signedOut();}}catch(e){console.error('Auth state error',e);showAuth(e.message||'Authentication error.')}},0)});}
-function normalizeP(p){return {...p,id:p.id,name:p.name,colours:p.colours||[],createdAt:p.created_at,updatedAt:p.updated_at}}
-function normalizeS(s){return {...s,id:s.id,productId:s.product_id,productName:s.product_name,colour:s.colour,size:s.size,quantity:Number(s.quantity),price:Number(s.price),total:Number(s.total),date:s.date}}
-async function cloudP(p){let {error}=await sb.from('products').upsert({id:p.id,user_id:currentUser.id,name:p.name,colours:p.colours,created_at:p.createdAt||new Date().toISOString(),updated_at:new Date().toISOString()});if(error)throw error}
-async function cloudS(s){let {error}=await sb.from('sales').upsert({id:s.id,user_id:currentUser.id,product_id:s.productId,product_name:s.productName,colour:s.colour,size:s.size,quantity:s.quantity,price:s.price,total:s.total,date:s.date});if(error)throw error}
-async function queue(op,payload){await add(QS,{op,payload})}
-async function saveP(p){await put(PS,p);try{await cloudP(p)}catch(e){await queue('product',p);throw e}}
-async function saveS(s){await put(SS,s);try{await cloudS(s)}catch(e){await queue('sale_legacy',s);throw e}}
-async function recordCloudSale(s){let {data,error}=await sb.rpc('record_stock_sale',{p_id:s.id,p_product_id:s.productId,p_colour:s.colour,p_size:s.size,p_quantity:s.quantity,p_price:s.price});if(error)throw error;return data}
-async function sync(){if(!sb||!currentUser||!navigator.onLine)return;try{await flushQueue();let {data:p,error:a}=await sb.from('products').select('*').eq('user_id',currentUser.id);if(a)throw a;let {data:s,error:b}=await sb.from('sales').select('*').eq('user_id',currentUser.id).order('date',{ascending:false});if(b)throw b;for(let x of p||[])await put(PS,normalizeP(x));for(let x of s||[])await put(SS,normalizeS(x))}catch(e){console.warn('Sync:',e.message||e);toast('Cloud sync unavailable. Local data is safe.','error')}}
-async function flushQueue(){let q=await all(QS);for(let x of q){try{if(x.op==='product')await cloudP(x.payload);else if(x.op==='sale')await recordCloudSale(x.payload);await del(QS,x.id)}catch(e){console.warn('Pending sync failed:',e.message||e)}}}
-function setupRealtime(){if(!sb||!currentUser)return;if(realtimeChannel){sb.removeChannel(realtimeChannel);realtimeChannel=null}realtimeChannel=sb.channel('stockflow-user-'+currentUser.id).on('postgres_changes',{event:'*',schema:'public',table:'products',filter:'user_id=eq.'+currentUser.id},payload=>{if(payload.eventType==='DELETE')del(PS,payload.old.id).catch(console.error);else put(PS,normalizeP(payload.new)).catch(console.error);scheduleRealtimeRender()}).on('postgres_changes',{event:'*',schema:'public',table:'sales',filter:'user_id=eq.'+currentUser.id},payload=>{if(payload.eventType!=='DELETE')put(SS,normalizeS(payload.new)).catch(console.error);scheduleRealtimeRender()}).subscribe(status=>console.log('StockFlow Realtime:',status))}
-function scheduleRealtimeRender(){clearTimeout(realtimeTimer);realtimeTimer=setTimeout(()=>render().catch(console.error),180)}
-async function signedIn(u){if(!u||currentUser?.id===u.id&&document.querySelector('#appShell').style.display==='block')return;currentUser=u;$('#authScreen').style.display='none';$('#appShell').style.display='block';$('#userEmail').textContent=u.email||'';setupNav();await sync();setupRealtime();await render()}
-async function signedOut(){if(realtimeChannel){await sb.removeChannel(realtimeChannel);realtimeChannel=null}currentUser=null;$('#appShell').style.display='none';showAuth()}
-const sizes=['XS','S','M','L','XL','XXL'];
-const crow=c=>`<div class="colour-row"><div class="colour-row-head"><input class="colour-name" placeholder="Colour name" value="${esc(c.name||'')}"><button type="button" class="danger-text remove-colour">Remove</button></div><div class="size-grid">${sizes.map(s=>`<label><span>${s}</span><input class="size-qty" data-size="${s}" type="number" min="0" value="${Number(c.sizes?.[s]||0)}"></label>`).join('')}</div></div>`;
-function openProduct(old=null){modal(`<div class="modal-head"><div><h2>${old?'Edit Product':'Add Product'}</h2><p>Synced to your Supabase account.</p></div><button class="icon-btn" data-close>×</button></div><form id="pf"><label class="field"><span>Product name</span><input id="pn" required value="${esc(old?.name||'')}"></label><div class="section-title"><span>Colours & sizes</span><button type="button" class="secondary" id="ac">+ Add Colour</button></div><div id="cr">${(old?.colours?.length?old.colours:[{}]).map(crow).join('')}</div><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary" id="sp">Save Product</button></div></form>`);$('#ac').onclick=()=>$('#cr').insertAdjacentHTML('beforeend',crow({}));$('#cr').onclick=e=>{if(e.target.classList.contains('remove-colour')){let r=$('#cr').children;if(r.length>1)e.target.closest('.colour-row').remove();else toast('At least one colour is required.','error')}};$('#pf').onsubmit=async e=>{e.preventDefault();let b=$('#sp');b.disabled=true;try{let name=$('#pn').value.trim(),cs=[...$('#cr').querySelectorAll('.colour-row')].map(r=>{let z={};r.querySelectorAll('.size-qty').forEach(i=>z[i.dataset.size]=Math.max(0,Number(i.value||0)));return{name:r.querySelector('.colour-name').value.trim(),sizes:z}});if(!name)throw Error('Product name is required.');if(cs.some(c=>!c.name))throw Error('Every colour needs a name.');if(!cs.some(c=>stock({colours:[c]})>0))throw Error('Enter at least one quantity.');let p={...(old||{}),id:old?.id||crypto.randomUUID(),name,colours:cs,createdAt:old?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()};try{await saveP(p);toast('Product saved to cloud.')}catch(x){toast('Saved locally; cloud sync pending.','error')}closeModal();await renderInventory()}catch(x){toast(x.message,'error')}finally{b.disabled=false}}}
-async function sell(p){modal(`<div class="modal-head"><div><h2>Record Sale</h2><p>${esc(p.name)}</p></div><button class="icon-btn" data-close>×</button></div><form id="sf"><label class="field"><span>Colour</span><select id="sc">${p.colours.map((c,i)=>`<option value="${i}">${esc(c.name)}</option>`).join('')}</select></label><label class="field"><span>Size</span><select id="ssz"></select></label><div id="av" class="muted"></div><label class="field"><span>Quantity</span><input id="sq" type="number" min="1" value="1"></label><label class="field"><span>Sale price per item</span><input id="spr" type="number" min="0" step=".01" required></label><div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button class="primary">Save Sale</button></div></form>`);function upd(){let c=p.colours[+$('#sc').value];$('#ssz').innerHTML=sizes.map(s=>`<option value="${s}" ${+(c.sizes?.[s]||0)<=0?'disabled':''}>${s} — ${+(c.sizes?.[s]||0)} available</option>`).join('');let a=+(c.sizes?.[$('#ssz').value]||0);$('#av').textContent=`Available: ${a}`;$('#sq').max=a}$('#sc').onchange=upd;$('#ssz').onchange=upd;$('#sf').onsubmit=async e=>{e.preventDefault();let b=e.submitter;b.disabled=true;try{let c=p.colours[+$('#sc').value],size=$('#ssz').value,q=+$('#sq').value,price=+$('#spr').value,a=+(c?.sizes?.[size]||0);if(!c||!size||q<1||q>a)throw Error('Invalid quantity or insufficient stock.');if(price<0)throw Error('Enter a valid price.');c.sizes[size]=a-q;let s={id:crypto.randomUUID(),productId:p.id,productName:p.name,colour:c.name,size,quantity:q,price,total:q*price,date:new Date().toISOString()};await put(PS,p);await put(SS,s);try{await recordCloudSale(s);toast('Sale saved and synced.')}catch(x){await queue('sale',s);toast('Sale saved locally; cloud sync pending.','error')}closeModal();await renderInventory()}catch(x){toast(x.message,'error')}finally{b.disabled=false}};upd()}
-async function renderDashboard(){let p=await all(PS),s=await all(SS),d=new Date().toISOString().slice(0,10),t=s.filter(x=>x.date.slice(0,10)===d);$('#content').innerHTML=`<div class="page-title"><div><h1>Dashboard</h1><p>Shared cloud inventory.</p></div></div><div class="stats"><div class="stat-card"><span>Products</span><strong>${p.length}</strong></div><div class="stat-card"><span>Available Stock</span><strong>${p.reduce((a,x)=>a+stock(x),0)}</strong></div><div class="stat-card"><span>Today's Units Sold</span><strong>${t.reduce((a,x)=>a+x.quantity,0)}</strong></div><div class="stat-card"><span>Today's Revenue</span><strong>${money(t.reduce((a,x)=>a+x.total,0))}</strong></div></div><div class="card"><h3>Sync</h3><p class="muted">${navigator.onLine?'Online — cloud sync active.':'Offline — local changes will sync when internet returns.'}</p><button class="primary" id="da">+ Add Product</button></div>`;$('#da').onclick=()=>openProduct()}
-async function renderInventory(){let p=await all(PS);$('#content').innerHTML=`<div class="page-title"><div><h1>Inventory</h1><p>Shared across your signed-in phones.</p></div><button class="primary" id="ia">+ Add Product</button></div><div class="search-row"><input id="iq" placeholder="Search products…"></div><div id="pl"></div>`;$('#ia').onclick=()=>openProduct();function draw(q=''){let f=p.filter(x=>x.name.toLowerCase().includes(q.toLowerCase()));$('#pl').innerHTML=f.length?f.map(x=>`<div class="product-card card"><div class="product-card-head"><div><h3>${esc(x.name)}</h3><span>${stock(x)} available</span></div><div class="actions"><button class="secondary ed" data-id="${x.id}">Edit</button><button class="primary sl" data-id="${x.id}">Sell</button></div></div><div class="colour-list">${x.colours.map(c=>`<div class="colour-block"><strong>${esc(c.name)}</strong><div class="size-chips">${sizes.map(s=>`<span class="${+(c.sizes?.[s]||0)?'':'zero'}">${s}: <b>${+(c.sizes?.[s]||0)}</b></span>`).join('')}</div></div>`).join('')}</div></div>`).join(''):`<div class="empty card"><h3>No products</h3><p>Add your first product.</p></div>`;$('#pl').querySelectorAll('.ed').forEach(b=>b.onclick=()=>openProduct(p.find(x=>x.id===b.dataset.id)));$('#pl').querySelectorAll('.sl').forEach(b=>b.onclick=()=>sell(p.find(x=>x.id===b.dataset.id)))}$('#iq').oninput=e=>draw(e.target.value);draw()}
-async function renderSales(){let s=(await all(SS)).sort((a,b)=>new Date(b.date)-new Date(a.date));$('#content').innerHTML=`<div class="page-title"><div><h1>Sales History</h1><p>Sales synced to your account.</p></div></div><div class="card table-wrap"><table><thead><tr><th>Date</th><th>Product</th><th>Colour</th><th>Size</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead><tbody>${s.map(x=>`<tr><td>${new Date(x.date).toLocaleString()}</td><td>${esc(x.productName)}</td><td>${esc(x.colour)}</td><td>${x.size}</td><td>${x.quantity}</td><td>${money(x.price)}</td><td>${money(x.total)}</td></tr>`).join('')||'<tr><td colspan="7">No sales yet.</td></tr>'}</tbody></table></div>`}
-async function renderReports(){let s=await all(SS),g={};s.forEach(x=>{g[x.productName]??={u:0,r:0};g[x.productName].u+=x.quantity;g[x.productName].r+=x.total});$('#content').innerHTML=`<div class="page-title"><div><h1>Reports</h1><p>Sales performance.</p></div></div><div class="card table-wrap"><table><thead><tr><th>Product</th><th>Units</th><th>Revenue</th></tr></thead><tbody>${Object.entries(g).map(([n,v])=>`<tr><td>${esc(n)}</td><td>${v.u}</td><td>${money(v.r)}</td></tr>`).join('')||'<tr><td colspan="3">No sales data.</td></tr>'}</tbody></table></div>`}
-async function renderSettings(){$('#content').innerHTML=`<div class="page-title"><div><h1>Settings</h1><p>Account and cloud sync.</p></div></div><div class="card"><h3>Account</h3><p>${esc(currentUser.email)}</p><button class="secondary" id="lo">Sign Out</button></div><div class="card"><h3>Synchronization</h3><p class="muted">Data is stored in Supabase and cached locally for offline use.</p><button class="primary" id="sn">Sync Now</button></div>`;$('#lo').onclick=()=>sb.auth.signOut();$('#sn').onclick=async()=>{await sync();toast('Sync completed.');await render()}}
-async function render(){if(currentView==='dashboard')return renderDashboard();if(currentView==='inventory')return renderInventory();if(currentView==='sales')return renderSales();if(currentView==='reports')return renderReports();return renderSettings()}
-function setupNav(){document.querySelectorAll('[data-page]').forEach(b=>b.onclick=async()=>{currentView=b.dataset.page;$('#title').textContent=b.textContent.trim();document.querySelectorAll('[data-page]').forEach(x=>x.classList.toggle('active',x===b));await render()});$('#addTop').onclick=()=>openProduct();$('#menu').onclick=()=>$('#side').classList.toggle('open');document.querySelectorAll('[data-page]').forEach(b=>b.addEventListener('click',()=>$('#side').classList.remove('open')))}
-async function init(){try{if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(console.warn);await openDB();$('#authForm').onsubmit=authSubmit;$('#authSwitch').onclick=()=>{authMode=authMode==='login'?'signup':'login';showAuth()};await auth()}catch(e){console.error(e);showAuth('Startup error: '+(e.message||e))}}
-addEventListener('online',()=>sync().then(()=>render()).catch(console.error));addEventListener('DOMContentLoaded',init);
+/* StockFlow — original UI + Supabase auth, realtime sync and offline queue */
+const CFG = window.STOCKFLOW_SUPABASE || {};
+const DB_NAME = "stockflow_cloud", DB_VERSION = 1;
+const SIZES = ["XS", "S", "M", "L", "XL", "XXL"];
+let db, sb, user = null, page = "dashboard", authMode = "login", channel = null, renderTimer = null, syncing = false;
 
-addEventListener('error',e=>{const m=$('#authMessage');if(m&&!currentUser)m.textContent='Error: '+(e.message||'unknown')});addEventListener('unhandledrejection',e=>{const m=$('#authMessage');if(m&&!currentUser)m.textContent='Error: '+(e.reason?.message||e.reason||'unknown')});
+const $ = s => document.querySelector(s), $$ = s => document.querySelectorAll(s);
+const money = n => "৳" + Number(n || 0).toLocaleString("en-BD", { maximumFractionDigits: 2 });
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const day = d => new Date(d).toLocaleDateString("en-CA");
+const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16)));
+const isUUID = s => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(s));
+const stock = p => (p.colours || []).reduce((a, c) => a + (c.sizes || []).reduce((b, z) => b + (z.qty || 0), 0), 0);
+
+/* ---------- UI helpers ---------- */
+function toast(x, type = "ok") {
+  const t = $("#toast"); t.textContent = x; t.classList.toggle("error", type === "error"); t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2600);
+}
+function closeModal() { $("#modal").classList.remove("show"); $("#modalBox").innerHTML = ""; }
+function openModal(html) { $("#modalBox").innerHTML = html; $("#modal").classList.add("show"); }
+async function setStatus(kind) {
+  const el = $("#syncPill"); if (!el) return;
+  let q = 0; try { q = (await all("queue")).length; } catch {}
+  const map = {
+    busy: ["Syncing…", "busy"], off: ["Offline" + (q ? ` · ${q} pending` : ""), "off"],
+    err: ["Sync issue" + (q ? ` · ${q} pending` : ""), "err"], ok: [q ? `${q} pending` : "Synced", q ? "off" : ""]
+  };
+  const [text, cls] = map[kind] || map.ok; el.textContent = text; el.className = "pill " + cls;
+}
+
+/* ---------- IndexedDB (local cache + offline queue) ---------- */
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open(DB_NAME, DB_VERSION);
+    r.onupgradeneeded = e => {
+      const d = e.target.result;
+      if (!d.objectStoreNames.contains("products")) d.createObjectStore("products", { keyPath: "id" });
+      if (!d.objectStoreNames.contains("sales")) d.createObjectStore("sales", { keyPath: "id" });
+      if (!d.objectStoreNames.contains("queue")) d.createObjectStore("queue", { keyPath: "qid", autoIncrement: true });
+    };
+    r.onsuccess = () => { db = r.result; resolve(); };
+    r.onerror = () => reject(r.error);
+  });
+}
+const req = (store, mode, method, arg) => new Promise((res, rej) => {
+  const r = db.transaction(store, mode).objectStore(store)[method](arg);
+  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+});
+const all = s => req(s, "readonly", "getAll");
+const put = (s, o) => req(s, "readwrite", "put", o);
+const del = (s, k) => req(s, "readwrite", "delete", k);
+const clear = s => req(s, "readwrite", "clear");
+
+/* ---------- cloud <-> app data shape ---------- */
+const sizesToArr = s => {
+  if (Array.isArray(s)) return s.map(z => ({ size: z.size, qty: Number(z.qty) || 0 }));
+  const o = s || {}, keys = Object.keys(o);
+  keys.sort((a, b) => (SIZES.indexOf(a) < 0 ? 99 : SIZES.indexOf(a)) - (SIZES.indexOf(b) < 0 ? 99 : SIZES.indexOf(b)));
+  return keys.map(k => ({ size: k, qty: Number(o[k]) || 0 }));
+};
+const fromCloudP = r => ({ id: r.id, name: r.name, colours: (r.colours || []).map(c => ({ name: c.name, sizes: sizesToArr(c.sizes) })), createdAt: r.created_at, updatedAt: r.updated_at });
+const toCloudP = p => ({
+  id: p.id, user_id: user.id, name: p.name,
+  colours: p.colours.map(c => ({ name: c.name, sizes: Object.fromEntries(sizesToArr(c.sizes).map(z => [z.size, z.qty])) })),
+  created_at: p.createdAt || new Date().toISOString(), updated_at: new Date().toISOString()
+});
+const fromCloudS = r => ({ id: r.id, productId: r.product_id, name: r.product_name, colour: r.colour, size: r.size, qty: Number(r.quantity), price: Number(r.price), total: Number(r.total), date: r.date });
+
+async function cloudSaveProduct(p) { const { error } = await sb.from("products").upsert(toCloudP(p)); if (error) throw error; }
+async function cloudSale(s) {
+  const { error } = await sb.rpc("record_stock_sale", { p_id: s.id, p_product_id: s.productId, p_colour: s.colour, p_size: s.size, p_quantity: s.qty, p_price: s.price });
+  if (error && !/duplicate key|already exists/i.test(error.message || "")) throw error;
+}
+const enqueue = (op, payload) => put("queue", { op, payload });
+const canSync = () => sb && user && navigator.onLine && !user.offlineOnly;
+
+/* ---------- sync ---------- */
+async function flushQueue() {
+  const q = (await all("queue")).sort((a, b) => a.qid - b.qid);
+  for (const x of q) {
+    try {
+      if (x.op === "product") await cloudSaveProduct(x.payload); else if (x.op === "sale") await cloudSale(x.payload);
+      await del("queue", x.qid);
+    } catch (e) {
+      console.warn("Pending item failed:", e.message || e);
+      break; // keep order; retry next time
+    }
+  }
+}
+async function sync(manual = false) {
+  if (syncing) return;
+  if (!canSync()) { await setStatus("off"); return; }
+  syncing = true; await setStatus("busy");
+  try {
+    await flushQueue();
+    const [{ data: p, error: a }, { data: s, error: b }] = await Promise.all([
+      sb.from("products").select("*").order("created_at"),
+      sb.from("sales").select("*").order("date", { ascending: false })
+    ]);
+    if (a) throw a; if (b) throw b;
+    const pending = new Set((await all("queue")).filter(x => x.op === "product").map(x => x.payload.id));
+    const keepP = new Set(); for (const x of p || []) { keepP.add(x.id); if (!pending.has(x.id)) await put("products", fromCloudP(x)); }
+    const keepS = new Set(); for (const x of s || []) { keepS.add(x.id); await put("sales", fromCloudS(x)); }
+    // drop local rows that no longer exist in the cloud (unless waiting to upload)
+    const sentSales = new Set((await all("queue")).filter(x => x.op === "sale").map(x => x.payload.id));
+    for (const x of await all("products")) if (!keepP.has(x.id) && !pending.has(x.id)) await del("products", x.id);
+    for (const x of await all("sales")) if (!keepS.has(x.id) && !sentSales.has(x.id)) await del("sales", x.id);
+    await setStatus("ok"); if (manual) toast("Sync completed");
+  } catch (e) {
+    console.warn("Sync:", e.message || e); await setStatus("err"); if (manual) toast("Cloud sync failed: " + (e.message || e), "error");
+  } finally { syncing = false; }
+}
+
+/* ---------- realtime ---------- */
+function startRealtime() {
+  stopRealtime(); if (!canSync()) return;
+  channel = sb.channel("stockflow-" + user.id)
+    .on("postgres_changes", { event: "*", schema: "public", table: "products", filter: "user_id=eq." + user.id }, async pl => {
+      try { if (pl.eventType === "DELETE") await del("products", pl.old.id); else await put("products", fromCloudP(pl.new)); } catch (e) { console.error(e); }
+      scheduleRender();
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "sales", filter: "user_id=eq." + user.id }, async pl => {
+      try { if (pl.eventType === "DELETE") await del("sales", pl.old.id); else await put("sales", fromCloudS(pl.new)); } catch (e) { console.error(e); }
+      scheduleRender();
+    })
+    .subscribe(s => console.log("Realtime:", s));
+}
+function stopRealtime() { if (channel && sb) { sb.removeChannel(channel); } channel = null; }
+function scheduleRender() { clearTimeout(renderTimer); renderTimer = setTimeout(() => { if (!$("#modal").classList.contains("show")) render().catch(console.error); }, 200); }
+
+/* ---------- auth ---------- */
+function showAuth(msg = "", ok = false) {
+  $("#authScreen").style.display = "flex"; $("#appShell").style.display = "none";
+  const login = authMode === "login";
+  $("#authTitle").textContent = login ? "Welcome back" : "Create your account";
+  $("#authSubtitle").textContent = login ? "Sign in to access your inventory." : "Create an account to sync inventory across phones.";
+  $("#authSubmit").textContent = login ? "Sign In" : "Create Account";
+  $("#authConfirmWrap").style.display = login ? "none" : "flex";
+  $("#authSwitch").textContent = login ? "Create an account" : "Already have an account? Sign in";
+  $("#authPassword").autocomplete = login ? "current-password" : "new-password";
+  const m = $("#authMessage"); m.textContent = msg; m.classList.toggle("ok", ok);
+}
+async function submitAuth(e) {
+  e.preventDefault(); if (!sb) return showAuth("Cloud service not ready. Check your connection and refresh.");
+  const email = $("#authEmail").value.trim(), password = $("#authPassword").value, btn = $("#authSubmit");
+  btn.disabled = true; $("#authMessage").textContent = "";
+  try {
+    if (authMode === "login") {
+      const { error } = await sb.auth.signInWithPassword({ email, password }); if (error) throw error;
+      showAuth("Signing in…", true);
+    } else {
+      if (password !== $("#authConfirm").value) throw Error("Passwords do not match.");
+      const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
+      if (error) throw error;
+      showAuth(data.session ? "Account created. Signing you in…" : "Account created. Check your email to confirm, then sign in.", true);
+    }
+  } catch (err) { console.error(err); showAuth(err.message || "Authentication failed."); }
+  finally { btn.disabled = false; }
+}
+async function enterApp(u) {
+  if (user && user.id === u.id && $("#appShell").style.display === "block") return;
+  // never mix two accounts' cached data on one device
+  if (localStorage.getItem("sf_uid") !== u.id) { await Promise.all([clear("products"), clear("sales"), clear("queue")]); localStorage.setItem("sf_uid", u.id); }
+  localStorage.setItem("sf_email", u.email || "");
+  user = u;
+  $("#authScreen").style.display = "none"; $("#appShell").style.display = "block"; $("#userEmail").textContent = u.email || "";
+  await render(); await sync(); startRealtime(); await render();
+}
+async function leaveApp() {
+  stopRealtime(); user = null; $("#appShell").style.display = "none"; $("#authPassword").value = ""; showAuth();
+}
+async function initAuth() {
+  const ready = CFG.url && CFG.publishableKey && !/YOUR_/.test(CFG.url + CFG.publishableKey);
+  const offlineUid = localStorage.getItem("sf_uid");
+  const offlineFallback = () => offlineUid && enterApp({ id: offlineUid, email: localStorage.getItem("sf_email") || "", offlineOnly: true });
+  if (!ready) return showAuth("Supabase is not configured. Add your Project URL and Publishable key to config.js.");
+  if (!window.supabase?.createClient) { if (await offlineFallback()) return; return showAuth("Could not load the cloud library. Check your internet connection and refresh."); }
+  sb = window.supabase.createClient(CFG.url, CFG.publishableKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+  sb.auth.onAuthStateChange((event, session) => {
+    // run outside the auth callback to avoid Supabase deadlocks
+    setTimeout(async () => {
+      try {
+        if (event === "INITIAL_SESSION") {
+          if (session) await enterApp(session.user);
+          else if (!navigator.onLine && offlineUid) await offlineFallback();
+          else showAuth();
+        } else if (event === "SIGNED_IN" && session) { if (user?.offlineOnly) user = null; await enterApp(session.user); }
+        else if (event === "SIGNED_OUT") { await leaveApp(); }
+      } catch (e) { console.error(e); showAuth(e.message || "Authentication error."); }
+    }, 0);
+  });
+}
+
+/* ---------- views ---------- */
+function productHTML(p) {
+  return `<div class="product"><div><h3>${esc(p.name)}</h3><span class="muted">${stock(p)} units · ${p.colours.length} colour(s)</span><div class="chips">${p.colours.map(c => {
+    const list = (c.sizes || []).filter(z => z.qty > 0).map(z => z.size + " " + z.qty).join(" · ");
+    return `<span class="chip ${list ? "" : "out"}"><b>${esc(c.name)}</b>: ${list || "out of stock"}</span>`;
+  }).join("")}</div></div><div><button class="sell" data-sell="${esc(p.id)}">Sell</button> <button class="secondary" data-edit="${esc(p.id)}">Edit</button></div></div>`;
+}
+async function render() {
+  const ps = (await all("products")).sort((a, b) => String(a.name).localeCompare(b.name)), ss = await all("sales");
+  const meta = {
+    dashboard: ["Dashboard", "Overview of your stock and sales"], inventory: ["Inventory", "Manage products, colours, sizes and stock"],
+    sales: ["Sales History", "Every completed sale, synced to your account"], reports: ["Reports", "Sales and inventory summary"], settings: ["Settings", "Account, sync and backup"]
+  }[page];
+  $("#title").textContent = meta[0]; $("#sub").textContent = meta[1];
+  $$(".nav").forEach(x => x.classList.toggle("active", x.dataset.page === page));
+  if (page === "dashboard") dash(ps, ss); if (page === "inventory") inventory(ps); if (page === "sales") sales(ss);
+  if (page === "reports") reports(ps, ss); if (page === "settings") await settings();
+  setStatus(navigator.onLine ? "ok" : "off");
+}
+function dash(ps, ss) {
+  const today = day(new Date()), ts = ss.filter(s => day(s.date) === today), rev = ss.reduce((a, s) => a + s.total, 0);
+  $("#content").innerHTML = `<div class="stats"><div class="stat"><small>PRODUCTS</small><strong>${ps.length}</strong></div><div class="stat"><small>AVAILABLE STOCK</small><strong>${ps.reduce((a, p) => a + stock(p), 0)}</strong></div><div class="stat"><small>TODAY'S SALES</small><strong>${ts.reduce((a, s) => a + s.qty, 0)}</strong></div><div class="stat"><small>TOTAL REVENUE</small><strong>${money(rev)}</strong></div></div><div class="grid"><div class="card"><h2>Inventory</h2>${ps.map(productHTML).join("") || '<div class="empty">No products yet.</div>'}</div><div class="card"><h2>Recent sales</h2>${salesTable(ss.slice().sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8))}</div></div>`;
+  bindProductButtons();
+}
+function inventory(ps) {
+  $("#content").innerHTML = `<div class="toolbar"><input id="search" class="search" placeholder="Search product or colour"></div><div id="list">${ps.map(productHTML).join("") || '<div class="card empty">No products yet. Click Add Product to begin.</div>'}</div>`;
+  bindProductButtons();
+  $("#search").oninput = () => {
+    const q = $("#search").value.toLowerCase();
+    $("#list").innerHTML = ps.filter(p => (p.name + " " + p.colours.map(c => c.name).join(" ")).toLowerCase().includes(q)).map(productHTML).join("") || '<div class="card empty">No matches.</div>';
+    bindProductButtons();
+  };
+}
+function bindProductButtons() {
+  $$("[data-sell]").forEach(b => b.onclick = () => sell(b.dataset.sell));
+  $$("[data-edit]").forEach(b => b.onclick = () => openProduct(b.dataset.edit));
+}
+function salesTable(a) {
+  return a.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>Date</th><th>Product</th><th>Colour</th><th>Size</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead><tbody>${a.map(s => `<tr><td>${new Date(s.date).toLocaleString()}</td><td>${esc(s.name)}</td><td>${esc(s.colour)}</td><td>${esc(s.size)}</td><td>${s.qty}</td><td>${money(s.price)}</td><td><b>${money(s.total)}</b></td></tr>`).join("")}</tbody></table></div>` : '<div class="empty">No sales yet.</div>';
+}
+function sales(a) { a = a.slice().sort((x, y) => y.date.localeCompare(x.date)); $("#content").innerHTML = `<div class="card">${salesTable(a)}</div>`; }
+function reports(ps, ss) {
+  const by = {}; ss.forEach(s => by[s.name] = (by[s.name] || 0) + s.total);
+  $("#content").innerHTML = `<div class="stats"><div class="stat"><small>UNITS SOLD</small><strong>${ss.reduce((a, s) => a + s.qty, 0)}</strong></div><div class="stat"><small>REVENUE</small><strong>${money(ss.reduce((a, s) => a + s.total, 0))}</strong></div><div class="stat"><small>STOCK</small><strong>${ps.reduce((a, p) => a + stock(p), 0)}</strong></div><div class="stat"><small>TRANSACTIONS</small><strong>${ss.length}</strong></div></div><div class="card"><h2>Revenue by product</h2>${Object.entries(by).sort((a, b) => b[1] - a[1]).map(([n, v]) => `<div class="summary"><span>${esc(n)}</span><b>${money(v)}</b></div>`).join("") || '<div class="empty">No sales yet.</div>'}</div>`;
+}
+async function settings() {
+  const q = (await all("queue")).length;
+  $("#content").innerHTML = `<div class="grid"><div class="card"><h2>Account</h2><p class="muted">${esc(user?.email || "")}</p><p class="muted">${q ? q + " change(s) waiting to upload." : "Everything is synced."}</p><button id="syncNow" class="primary">Sync now</button> <button id="so" class="secondary">Sign out</button></div><div class="card"><h2>Backup</h2><p class="muted">Export your inventory and sales as a JSON file.</p><button id="backup" class="primary">Export Backup</button></div><div class="card"><h2>Import</h2><p class="muted">Import a StockFlow JSON backup (including old offline-only backups) into your cloud inventory. Existing data is kept.</p><input id="restore" type="file" accept=".json"></div></div>`;
+  $("#syncNow").onclick = async () => { await sync(true); await render(); };
+  $("#so").onclick = () => signOut();
+  $("#backup").onclick = backup; $("#restore").onchange = e => restore(e.target.files[0]);
+}
+
+/* ---------- product form ---------- */
+function fullSizes(arr) {
+  const m = new Map(sizesToArr(arr).map(z => [z.size, z.qty]));
+  const extra = [...m.keys()].filter(k => !SIZES.includes(k));
+  return [...SIZES, ...extra].map(size => ({ size, qty: m.get(size) || 0 }));
+}
+async function openProduct(id = null) {
+  let p = null; if (id) { p = (await all("products")).find(x => x.id === id); if (!p) return; }
+  const initial = p?.colours?.length ? p.colours : [{ name: "", sizes: fullSizes([]) }];
+  openModal(`<h2>${p ? "Edit Product" : "Add Product"}</h2><form id="productForm"><div class="field"><label>PRODUCT NAME</label><input id="productName" required value="${esc(p?.name || "")}" placeholder="e.g. Dior"></div><div class="field"><label>COLOURS & STOCK</label><div id="colours"></div><button type="button" id="addColour" class="secondary">＋ Add Colour</button></div><div class="modal-foot"><button type="button" id="cancel" class="secondary">Cancel</button><button type="submit" class="primary" id="saveBtn">Save Product</button></div></form>`);
+  const box = $("#colours"); initial.forEach(c => addColourRow(box, { name: c.name, sizes: fullSizes(c.sizes) }));
+  $("#addColour").onclick = () => addColourRow(box); $("#cancel").onclick = closeModal;
+  $("#productForm").onsubmit = async e => {
+    e.preventDefault(); const btn = $("#saveBtn"); btn.disabled = true;
+    try {
+      const name = $("#productName").value.trim();
+      const colours = [...box.querySelectorAll(".colour")].map(c => ({
+        name: c.querySelector(".colourName").value.trim(),
+        sizes: [...c.querySelectorAll("[data-size]")].map(x => ({ size: x.dataset.size, qty: Math.max(0, parseInt(x.value || "0", 10) || 0) }))
+      })).filter(c => c.name);
+      if (!name) return toast("Enter a product name.", "error");
+      if (!colours.length) return toast("Add at least one colour.", "error");
+      if (!colours.some(c => c.sizes.some(z => z.qty > 0))) return toast("Enter at least one quantity.", "error");
+      const obj = { ...(p || {}), id: p?.id || uuid(), name, colours, createdAt: p?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
+      await put("products", obj);
+      let msg = "Product saved";
+      if (canSync()) { try { await cloudSaveProduct(obj); msg = "Product saved & synced"; } catch (err) { console.warn(err); await enqueue("product", obj); msg = "Saved locally — will sync later"; } }
+      else { await enqueue("product", obj); msg = "Saved offline — will sync later"; }
+      closeModal(); toast(msg); await render();
+    } catch (err) { console.error(err); toast("Could not save product.", "error"); }
+    finally { btn.disabled = false; }
+  };
+}
+function addColourRow(box, c = { name: "", sizes: fullSizes([]) }) {
+  const d = document.createElement("div"); d.className = "colour";
+  d.innerHTML = `<div style="display:flex;gap:8px"><input class="colourName" required placeholder="Colour e.g. Olive" value="${esc(c.name)}"><button type="button" class="danger removeColour">Remove</button></div><div class="sizes">${c.sizes.map(z => `<div class="size"><label>${esc(z.size)}</label><input data-size="${esc(z.size)}" type="number" min="0" step="1" value="${z.qty}"></div>`).join("")}</div>`;
+  box.appendChild(d);
+  d.querySelector(".removeColour").onclick = () => { if (box.children.length > 1) d.remove(); else toast("At least one colour is required.", "error"); };
+}
+
+/* ---------- sell ---------- */
+async function sell(id) {
+  const p = (await all("products")).find(x => x.id === id); if (!p) return;
+  openModal(`<h2>Record Sale</h2><div class="notice">${esc(p.name)} — stock is reduced automatically.</div><form id="saleForm"><div class="form-grid"><div class="field"><label>COLOUR</label><select id="saleColour">${p.colours.map((c, i) => `<option value="${i}">${esc(c.name)}</option>`).join("")}</select></div><div class="field"><label>SIZE</label><select id="saleSize"></select></div><div class="field"><label>QUANTITY</label><input id="saleQty" type="number" min="1" value="1" required></div><div class="field"><label>PRICE / UNIT (৳)</label><input id="salePrice" type="number" min="0" step=".01" required></div></div><div id="available" class="muted"></div><div class="modal-foot"><button type="button" id="cancel" class="secondary">Cancel</button><button class="primary" id="saleBtn">Confirm Sale</button></div></form>`);
+  const refresh = () => {
+    const c = p.colours[+$("#saleColour").value], valid = c.sizes.filter(z => z.qty > 0), cur = $("#saleSize").value;
+    $("#saleSize").innerHTML = valid.map(z => `<option value="${esc(z.size)}" ${z.size === cur ? "selected" : ""}>${esc(z.size)} — ${z.qty} available</option>`).join("");
+    const a = valid.find(z => z.size === $("#saleSize").value)?.qty || 0;
+    $("#available").textContent = valid.length ? `Available: ${a}` : "No stock for this colour"; $("#saleQty").max = a;
+  };
+  $("#saleColour").onchange = () => { $("#saleSize").value = ""; refresh(); }; $("#saleSize").onchange = refresh; $("#cancel").onclick = closeModal; refresh();
+  $("#saleForm").onsubmit = async e => {
+    e.preventDefault(); const btn = $("#saleBtn"); btn.disabled = true;
+    try {
+      const c = p.colours[+$("#saleColour").value], size = $("#saleSize").value, z = c.sizes.find(x => x.size === size), qty = parseInt($("#saleQty").value, 10), price = +$("#salePrice").value;
+      if (!z || !(qty >= 1) || qty > z.qty) return toast("Not enough stock.", "error");
+      if (!(price >= 0)) return toast("Enter a valid price.", "error");
+      const s = { id: uuid(), productId: p.id, name: p.name, colour: c.name, size, qty, price, total: qty * price, date: new Date().toISOString() };
+      z.qty -= qty; p.updatedAt = new Date().toISOString();
+      await put("products", p); await put("sales", s);
+      let msg = "Sale recorded";
+      if (canSync()) {
+        try { await flushQueue(); await cloudSale(s); msg = "Sale recorded & synced"; }
+        catch (err) { console.warn(err); await enqueue("sale", s); msg = /insufficient|not found/i.test(err.message || "") ? "Cloud stock differs — will resolve on sync" : "Saved locally — will sync later"; }
+      } else { await enqueue("sale", s); msg = "Sale saved offline — will sync later"; }
+      closeModal(); toast(msg); await render();
+    } catch (err) { console.error(err); toast("Could not record sale.", "error"); }
+    finally { btn.disabled = false; }
+  };
+}
+
+/* ---------- backup / import ---------- */
+async function backup() {
+  const data = { version: 2, exportedAt: new Date().toISOString(), products: await all("products"), sales: await all("sales") };
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+  a.download = "stockflow-backup-" + day(new Date()) + ".json"; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+async function restore(file) {
+  if (!file) return;
+  try {
+    const d = JSON.parse(await file.text());
+    if (!Array.isArray(d.products) || !Array.isArray(d.sales)) throw 0;
+    if (!canSync()) return toast("Go online to import into your cloud inventory.", "error");
+    if (!confirm(`Import ${d.products.length} product(s) and ${d.sales.length} sale(s) into your account?`)) return;
+    const idMap = new Map(); let np = 0, ns = 0;
+    for (const old of d.products) {
+      const id = isUUID(old.id) ? old.id : (idMap.get(String(old.id)) || uuid()); idMap.set(String(old.id), id);
+      const p = { id, name: old.name, colours: (old.colours || []).map(c => ({ name: c.name, sizes: fullSizes(c.sizes) })), createdAt: old.createdAt };
+      await cloudSaveProduct(p); await put("products", p); np++;
+    }
+    for (const s of d.sales) {
+      const pid = idMap.get(String(s.productId)) || (isUUID(s.productId) ? s.productId : null); if (!pid) continue;
+      const row = { id: isUUID(s.id) ? s.id : uuid(), user_id: user.id, product_id: pid, product_name: s.name || s.productName, colour: s.colour, size: s.size, quantity: s.qty ?? s.quantity, price: s.price, total: s.total ?? (s.qty ?? s.quantity) * s.price, date: s.date };
+      const { error } = await sb.from("sales").insert(row); if (error && error.code !== "23505") throw error; ns++;
+    }
+    await sync(); toast(`Imported ${np} product(s), ${ns} sale(s)`); await render();
+  } catch (e) { console.error(e); toast("Import failed: " + (e.message || "invalid backup file"), "error"); }
+}
+async function signOut() { try { await sb?.auth.signOut(); } catch (e) { console.warn(e); } if (user) await leaveApp(); }
+
+/* ---------- start ---------- */
+$$(".nav").forEach(n => n.onclick = () => { page = n.dataset.page; render(); $("#side").classList.remove("open"); });
+$("#addTop").onclick = () => openProduct();
+$("#menu").onclick = () => $("#side").classList.toggle("open");
+$("#signOut").onclick = signOut;
+$("#modal").onclick = e => { if (e.target.id === "modal") closeModal(); };
+$("#authForm").onsubmit = submitAuth;
+$("#authSwitch").onclick = () => { authMode = authMode === "login" ? "signup" : "login"; showAuth(); };
+addEventListener("online", () => sync().then(() => render()).catch(console.error));
+addEventListener("offline", () => setStatus("off"));
+document.addEventListener("visibilitychange", () => { if (!document.hidden && user) sync().then(() => render()).catch(console.error); });
+addEventListener("error", e => { if (!user) { const m = $("#authMessage"); if (m) m.textContent = "Error: " + (e.message || "unknown"); } });
+openDB().then(initAuth).catch(e => { console.error(e); showAuth("Local database could not be opened: " + (e.message || e)); });
+if ("serviceWorker" in navigator) addEventListener("load", () => navigator.serviceWorker.register("./sw.js").catch(console.warn));
