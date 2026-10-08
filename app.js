@@ -350,7 +350,7 @@ async function openProduct(id = null) {
 }
 function addColourRow(box, c = { name: "", sizes: fullSizes([]) }) {
   const d = document.createElement("div"); d.className = "colour";
-  d.innerHTML = `<div style="display:flex;gap:8px"><input class="colourName" required placeholder="Colour e.g. Olive" value="${esc(c.name)}"><button type="button" class="danger removeColour">Remove</button></div><div class="sizes">${c.sizes.map(z => `<div class="size"><label>${esc(z.size)}</label><input data-size="${esc(z.size)}" type="number" min="0" step="1" value="${z.qty}"></div>`).join("")}</div>`;
+  d.innerHTML = `<div style="display:flex;gap:8px"><input class="colourName" required placeholder="Colour e.g. Olive" value="${esc(c.name)}"><button type="button" class="danger removeColour">Remove</button></div><div class="sizes">${c.sizes.map(z => `<div class="size"><label>${esc(z.size)}</label><input data-size="${esc(z.size)}" type="number" min="0" step="1" value="${z.qty || ''}" placeholder="0"></div>`).join("")}</div>`;
   box.appendChild(d);
   d.querySelector(".removeColour").onclick = () => { if (box.children.length > 1) d.remove(); else toast("At least one colour is required.", "error"); };
 }
